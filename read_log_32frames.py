@@ -45,7 +45,6 @@ for log_name, seq_name in zip(log_names, seq_names):
                     d1_psnr_sum += float(words[9])
                     d2_psnr_sum += float(words[10])
                     if int(words[7]) == 31:
-                        print('result:', count, bpp_sum/count, d1_psnr_sum/count)
                         results[seq_name]['bpp'].append(bpp_sum/count)
                         results[seq_name]['d1-psnr'].append(d1_psnr_sum/count)
                         results[seq_name]['d2-psnr'].append(d2_psnr_sum/count)
@@ -66,7 +65,6 @@ for log_name, seq_name in zip(log_names, seq_names):
                     d1_psnr_sum += float(words[9])
                     d2_psnr_sum += float(words[10])
                     if int(words[7]) == 31:
-                        print('result:', count, bpp_sum/count, d1_psnr_sum/count)
                         results[seq_name]['bpp'].append(bpp_sum/count)
                         results[seq_name]['d1-psnr'].append(d1_psnr_sum/count)
                         results[seq_name]['d2-psnr'].append(d2_psnr_sum/count)
@@ -87,7 +85,6 @@ for log_name, seq_name in zip(log_names, seq_names):
                     d1_psnr_sum += float(words[9])
                     d2_psnr_sum += float(words[10])
                     if int(words[7]) == 31:
-                        print('result:', count, bpp_sum/count, d1_psnr_sum/count)
                         results[seq_name]['bpp'].append(bpp_sum/count)
                         results[seq_name]['d1-psnr'].append(d1_psnr_sum/count)
                         results[seq_name]['d2-psnr'].append(d2_psnr_sum/count)
@@ -108,7 +105,6 @@ for log_name, seq_name in zip(log_names, seq_names):
                     d1_psnr_sum += float(words[9])
                     d2_psnr_sum += float(words[10])
                     if int(words[7]) == 31:
-                        print('result:', count, bpp_sum/count, d1_psnr_sum/count)
                         results[seq_name]['bpp'].append(bpp_sum/count)
                         results[seq_name]['d1-psnr'].append(d1_psnr_sum/count)
                         results[seq_name]['d2-psnr'].append(d2_psnr_sum/count)
@@ -128,7 +124,6 @@ for log_name, seq_name in zip(log_names, seq_names):
                     d1_psnr_sum += float(words[9])
                     d2_psnr_sum += float(words[10])
                     if int(words[7]) == 31:
-                        print('result:', count, bpp_sum/count, d1_psnr_sum/count)
                         results[seq_name]['bpp'].append(bpp_sum/count)
                         results[seq_name]['d1-psnr'].append(d1_psnr_sum/count)
                         results[seq_name]['d2-psnr'].append(d2_psnr_sum/count)
@@ -148,7 +143,6 @@ for log_name, seq_name in zip(log_names, seq_names):
                     d1_psnr_sum += float(words[9])
                     d2_psnr_sum += float(words[10])
                     if int(words[7]) == 31:
-                        print('result:', count, bpp_sum/count, d1_psnr_sum/count)
                         results[seq_name]['bpp'].append(bpp_sum/count)
                         results[seq_name]['d1-psnr'].append(d1_psnr_sum/count)
                         results[seq_name]['d2-psnr'].append(d2_psnr_sum/count)
@@ -168,7 +162,6 @@ for log_name, seq_name in zip(log_names, seq_names):
         #             d1_psnr_sum += float(words[9])
         #             d2_psnr_sum += float(words[10])
         #             if int(words[7]) == 31:
-        #                 print('result:', count, bpp_sum/count, d1_psnr_sum/count)
         #                 results[seq_name]['bpp'].append(bpp_sum/count)
         #                 results[seq_name]['d1-psnr'].append(d1_psnr_sum/count)
         #                 results[seq_name]['d2-psnr'].append(d2_psnr_sum/count)
@@ -188,7 +181,6 @@ for log_name, seq_name in zip(log_names, seq_names):
                     d1_psnr_sum += float(words[9])
                     d2_psnr_sum += float(words[10])
                     if int(words[7]) == 31:
-                        print('result:', count, bpp_sum/count, d1_psnr_sum/count)
                         results[seq_name]['bpp'].append(bpp_sum/count)
                         results[seq_name]['d1-psnr'].append(d1_psnr_sum/count)
                         results[seq_name]['d2-psnr'].append(d2_psnr_sum/count)
