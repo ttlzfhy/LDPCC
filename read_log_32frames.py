@@ -9,7 +9,7 @@ import MinkowskiEngine as ME
 import random
 import pandas as pd
 
-root_dir = '/home/xiashuting/pycharm/DDPCC-23-concat/'
+root_dir = os.path.dirname(os.path.abspath(__file__))
 log_names = ['96frames-0.txt', '96frames-1.txt', '96frames-2.txt', '96frames-3.txt']
 seq_names = ['basketball', 'dancer', 'exercise', 'model']
 results = {
@@ -18,12 +18,12 @@ results = {
     'exercise': {'bpp': [], 'd1-psnr': [], 'd2-psnr': []},
     'model': {'bpp': [], 'd1-psnr': [], 'd2-psnr': []}
 }
-results_dir = './mpeg-results-32frames'
+results_dir = './mpeg-results-32-10bit'
 results_dir_ = Path(results_dir)
 results_dir_.mkdir(exist_ok=True)
 
 for log_name, seq_name in zip(log_names, seq_names):
-    log_dir = root_dir + log_name
+    log_dir = os.path.join(root_dir, log_name)
     reader = open(log_dir, 'r')
     flag = 0
     count = 0
