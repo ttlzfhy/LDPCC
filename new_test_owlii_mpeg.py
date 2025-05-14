@@ -3,6 +3,8 @@ import importlib
 import logging
 import sys
 import os
+
+
 def parse_args():
     '''PARAMETERS'''
     parser = argparse.ArgumentParser('Test Script')
@@ -46,7 +48,18 @@ def log_string(string):
     print(string)
 
 
-def PSNR(pc1, pc2, n1, return_all=False):
+def psnr_peak_value(x: torch.Tensor):
+    if isinstance(x, torch.Tensor):
+        coordinates = x.detach().cpu().numpy()
+    elif isinstance(x, ME.SparseTensor):
+        coordinates = x.C[:, 1:].detach().cpu().numpy()
+    else:
+        raise TypeError("Input must be torch.Tensor or ME.SparseTensor")
+    resolution = 2 ** np.round(np.log2(coordinates.max() - coordinates.min())) - 1
+    return int(resolution)
+
+
+def PSNR(pc1, pc2, n1, return_all=False, peak_value=1023):
     pc1, pc2 = pc1.to(torch.float32), pc2.to(torch.float32)
     dist1, knn1, _ = knn_points(pc1, pc2, K=4)  # neighbors of pc1 from pc2
     dist2, knn2, _ = knn_points(pc2, pc1, K=4)  # neighbors of pc2 from pc1
@@ -55,9 +68,9 @@ def PSNR(pc1, pc2, n1, return_all=False):
     dist = max(dist1[:, :, 0].mean(), dist2[:, :, 0].mean())  # dists from knn_points are squared dists
     cd = max(dist1[:, :, 0].sqrt().mean(), dist2[:, :, 0].sqrt().mean())
     # print(pc1, pc2)
-    d1_psnr = 10*math.log(3*1023*1023/dist)/math.log(10)
-    d1_psnr_1 = 10 * math.log(3 * 1023 * 1023 / dist1[:, :, 0].mean()) / math.log(10)
-    d1_psnr_2 = 10 * math.log(3 * 1023 * 1023 / dist2[:, :, 0].mean()) / math.log(10)
+    d1_psnr = 10*math.log(3*peak_value*peak_value/dist)/math.log(10)
+    d1_psnr_1 = 10 * math.log(3 * peak_value * peak_value / dist1[:, :, 0].mean()) / math.log(10)
+    d1_psnr_2 = 10 * math.log(3 * peak_value * peak_value / dist2[:, :, 0].mean()) / math.log(10)
     knn1_ = knn1.reshape(-1)
     n1_src = (n1.unsqueeze(2).repeat(1, 1, 4, 1)*(mask1.unsqueeze(-1))).reshape(-1, 3)
     n2 = torch.zeros_like(pc2.squeeze(0), dtype=torch.float64)
@@ -83,7 +96,7 @@ def PSNR(pc1, pc2, n1, return_all=False):
     n1_ = index_points(n2, knn1)
     d1_ = (((v1 * n1_).sum(dim=-1).square() * mask1).sum(dim=-1) / mask1.sum(dim=-1)).mean()
     dist_ = max(d1_, d2_)
-    d2_psnr = 10*math.log(3*1023*1023/dist_)/math.log(10)
+    d2_psnr = 10*math.log(3*peak_value*peak_value/dist_)/math.log(10)
     # print(d1_psnr, d2_psnr)
     if return_all:
         return d1_psnr_1, d1_psnr_2, d1_psnr, d2_psnr, cd.item()
@@ -152,15 +165,15 @@ def encode(f1, f2, bitstream_filename, gpcc_bitstream_filename):
     file.write(np.array(max_v_res, dtype=np.int8).tobytes())
     file.write(np.array(min_v_res2, dtype=np.int8).tobytes())
     file.write(np.array(max_v_res2, dtype=np.int8).tobytes())
-    file.write(np.array(quant_y.shape[1], dtype=np.int16).tobytes())
-    file.write(np.array(quant_motion_1.shape[0], dtype=np.int16).tobytes())
-    file.write(np.array(quant_motion_2.shape[0], dtype=np.int16).tobytes())
-    file.write(np.array(ys2[0].shape[0], dtype=np.int32).tobytes())
-    file.write(np.array(ys2[1].shape[0], dtype=np.int32).tobytes())
-    file.write(np.array(len(motion_bitstream_1), dtype=np.int16).tobytes())
-    file.write(np.array(len(motion_bitstream_2), dtype=np.int16).tobytes())
-    file.write(np.array(len(ys2_2_feature_bitstream), dtype=np.int16).tobytes())
-    file.write(np.array(len(ys2_2_bitstream), dtype=np.int16).tobytes())
+    file.write(np.array(quant_y.shape[1], dtype=np.uint16).tobytes())
+    file.write(np.array(quant_motion_1.shape[0], dtype=np.uint16).tobytes())
+    file.write(np.array(quant_motion_2.shape[0], dtype=np.uint16).tobytes())
+    file.write(np.array(ys2[0].shape[0], dtype=np.uint32).tobytes())
+    file.write(np.array(ys2[1].shape[0], dtype=np.uint32).tobytes())
+    file.write(np.array(len(motion_bitstream_1), dtype=np.uint16).tobytes())
+    file.write(np.array(len(motion_bitstream_2), dtype=np.uint16).tobytes())
+    file.write(np.array(len(ys2_2_feature_bitstream), dtype=np.uint16).tobytes())
+    file.write(np.array(len(ys2_2_bitstream), dtype=np.uint16).tobytes())
     file.write(motion_bitstream_1)
     file.write(motion_bitstream_2)
     file.write(ys2_2_feature_bitstream)
@@ -175,11 +188,11 @@ def decode(f1, bitstream_filename, gpcc_bitstream_filename):
     min_v_motion_1_, max_v_motion_1_, min_v_motion_2_, max_v_motion_2_, min_v_res_, max_v_res_, min_v_res2_, max_v_res2_ \
         = np.frombuffer(file.read(8), dtype=np.int8)
     quant_y_length, quant_motion_1_length, quant_motion_2_length = np.frombuffer(
-        file.read(6), dtype=np.int16)
+        file.read(6), dtype=np.uint16)
     num_points_0, num_points_1 = np.frombuffer(
-        file.read(8), dtype=np.int32)
+        file.read(8), dtype=np.uint32)
     motion_bitstream_1_length, motion_bitstream_2_length, ys2_2_feature_bitstream_length, ys2_2_bitstream_length = np.frombuffer(
-        file.read(8), dtype=np.int16)
+        file.read(8), dtype=np.uint16)
     motion_bitstream_1_ = file.read(motion_bitstream_1_length)
     motion_bitstream_2_ = file.read(motion_bitstream_2_length)
     ys2_2_feature_bitstream_ = file.read(ys2_2_feature_bitstream_length)
@@ -335,7 +348,9 @@ if __name__ == '__main__':
                 # encode the first frame
                 xyz, point, xyz1, point1 = collate_pointcloud_fn([dataset[0]])
                 f1 = ME.SparseTensor(features=point, coordinates=xyz, device=device)
-                bpp, d1psnr, d2psnr, f1 = test_one_frame(f1, pcgcv2_ckpt, os.path.join(tmp_dir, 'pcgcv2'))
+                peak_value = psnr_peak_value(f1)
+                print('peak_value:', peak_value)
+                bpp, d1psnr, d2psnr, f1 = test_one_frame(f1, pcgcv2_ckpt, os.path.join(tmp_dir, 'pcgcv2'), res=peak_value+1)
                 f1 = ME.SparseTensor(torch.ones_like(f1.F[:, :1]), coordinates=f1.C)
                 log_string(str(0) + ' ' + str(bpp)[:7] + ' ' + str(d1psnr)[:7] + ' ' + str(d2psnr)[:7] + '\n')
                 bpp_sum += bpp
@@ -382,11 +397,11 @@ if __name__ == '__main__':
                     pc_recon = recon_f2.C[:, 1:]
                     pcd = open3d.geometry.PointCloud()
                     pcd.points = open3d.utility.Vector3dVector(pc_ori.detach().cpu().numpy())
-                    pcd.estimate_normals(search_param=open3d.geometry.KDTreeSearchParamKNN(knn=20))  # knn=5 in the proposal
+                    pcd.estimate_normals(search_param=open3d.geometry.KDTreeSearchParamKNN(knn=20))  # knn=5 in our MPEG proposal
                     n1 = torch.tensor(np.asarray(pcd.normals)).cuda()
                     pc_ori, pc_recon, n1 = pc_ori.unsqueeze(0), pc_recon.unsqueeze(0), n1.unsqueeze(0)
 
-                    d1psnr, d2psnr, cd = PSNR(pc_ori, pc_recon, n1)
+                    d1psnr, d2psnr, cd = PSNR(pc_ori, pc_recon, n1, peak_value=peak_value)
                     log_string(str(i) + ' ' + str(bpp)[:7] + ' ' + str(d1psnr)[:7] + ' ' + str(d2psnr)[:7] + '\n')
                     f1 = recon_f2
                     bpp_sum += bpp
