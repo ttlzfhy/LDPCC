@@ -7,6 +7,7 @@ import importlib
 import logging
 import sys
 import os
+from pathlib import Path
 
 
 def parse_args():
@@ -15,22 +16,20 @@ def parse_args():
     parser.add_argument('--model', type=str, default='DDPCC_geo')
     parser.add_argument('--lossless_model', type=str, default='DDPCC_lossless_coder')
     parser.add_argument('--log_name', type=str, default='bbb')
-    parser.add_argument('--gpu', type=str, default='4', help='specify gpu device [default: 0]')
+    parser.add_argument('--gpu', type=str, default='2', help='specify gpu device [default: 0]')
     parser.add_argument('--channels', default=8, type=int)
     parser.add_argument('--ckpt_dir', type=str,
                         default='./final_ckpts')
     parser.add_argument('--pcgcv2_ckpt_dir', type=str,
                         default='./pcgcv2_ckpts')
     parser.add_argument('--frame_count', type=int, default=100, help='number of frames to be coded')
-    parser.add_argument('--results_dir', type=str, default='mpeg-results-pcerror', help='directory to store results (in csv format)')
-    parser.add_argument('--tmp_dir', type=str, default='tmp')
+
     parser.add_argument('--overwrite', type=bool, default=False, help='overwrite the bitstream of previous frame')
-    parser.add_argument('--dataset_dir', type=str, default='/home/old/gaolinyao/Owlii_10bit')
+    parser.add_argument('--dataset_dir', type=str, default='/home/data/dataset/point_cloud/aipcc_cfp_testdata_all/model_vox10')
+    parser.add_argument('--f1_path', default=None, type=str, help='path of the first frame, when test was unexpectedly stopped and need continue')
     return parser.parse_args()
 args = parse_args()
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
-
-from pathlib import Path
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = BASE_DIR
@@ -38,7 +37,7 @@ sys.path.append(os.path.join(ROOT_DIR, 'models'))
 sys.path.append(os.path.join(ROOT_DIR, './PCGCv2'))
 
 from models.model_utils import index_points, sort_by_coor_sum, coordinate_sort_by_coor_sum, quant
-from dataset_owlii import *
+from dataset_lossy_v1 import *
 from models.entropy_coding import *
 from GPCC.gpcc_wrapper import *
 from PCGCv2.eval import test_one_frame
@@ -47,9 +46,24 @@ import collections, math
 from pytorch3d.ops import knn_points
 
 
-def log_string(string):
-    logger.info(string)
-    print(string)
+def write_file(x_ori, x_dec, showdir, idx):
+    # write files
+    if isinstance(x_ori, ME.SparseTensor):
+        points_ori = x_ori.C[:, 1:].detach().cpu().numpy()
+    else:
+        points_ori = x_ori
+    # ori_dir = os.path.join(showdir, 'f2'+str(idx)+'.ply')
+    ori_dir = os.path.join(showdir, 'f2.ply')
+    write_ply_open3d_normal(ori_dir, points_ori)
+    #
+    if isinstance(x_dec, ME.SparseTensor):
+        points_dec = x_dec.C[:, 1:].detach().cpu().numpy()
+    else:
+        points_dec = x_dec
+    dec_dir = os.path.join(showdir, 'f2_dec'+str(idx)+'.ply')
+    write_ply_data(dec_dir, points_dec)
+
+    return ori_dir, dec_dir
 
 
 def psnr_peak_value(x: torch.Tensor):
@@ -59,8 +73,13 @@ def psnr_peak_value(x: torch.Tensor):
         coordinates = x.C[:, 1:].detach().cpu().numpy()
     else:
         raise TypeError("Input must be torch.Tensor or ME.SparseTensor")
-    resolution = 2 ** np.round(np.log2(coordinates.max() - coordinates.min())) - 1
+    resolution = 2 ** np.round(np.log2(coordinates.max() - coordinates.min()))
     return int(resolution)
+
+
+def log_string(string):
+    logger.info(string)
+    print(string)
 
 
 def PSNR(pc1, pc2, n1, return_all=False, peak_value=1023):
@@ -158,45 +177,55 @@ def encode(f1, f2, bitstream_filename, gpcc_bitstream_filename):
         lossless_model.compressor.bitEstimator, ys2_2_feature.F)
     ys2_2_bitstream = binary_entropy_coding(p, ys2_2_target)
     ys2_5_C = ys2[5].decomposed_coordinates[0].detach().cpu().numpy()
-    write_ply_data(os.path.join(tmp_dir, 'ys2_5.ply'), ys2_5_C / 8)
-    gpcc_encode(os.path.join(tmp_dir, 'ys2_5.ply'), gpcc_bitstream_filename)
+    write_ply_data(os.path.join(showdir, 'ys2_5.ply'), ys2_5_C / 8)
+    gpcc_encode(os.path.join(showdir, 'ys2_5.ply'), gpcc_bitstream_filename)
     file = open(bitstream_filename, 'wb')
-    file.write(np.array(min_v_motion_1, dtype=np.int8).tobytes())
-    file.write(np.array(max_v_motion_1, dtype=np.int8).tobytes())
-    file.write(np.array(min_v_motion_2, dtype=np.int8).tobytes())
-    file.write(np.array(max_v_motion_2, dtype=np.int8).tobytes())
-    file.write(np.array(min_v_res, dtype=np.int8).tobytes())
-    file.write(np.array(max_v_res, dtype=np.int8).tobytes())
-    file.write(np.array(min_v_res2, dtype=np.int8).tobytes())
-    file.write(np.array(max_v_res2, dtype=np.int8).tobytes())
-    file.write(np.array(quant_y.shape[1], dtype=np.uint16).tobytes())
-    file.write(np.array(quant_motion_1.shape[0], dtype=np.uint16).tobytes())
-    file.write(np.array(quant_motion_2.shape[0], dtype=np.uint16).tobytes())
+    file.write(np.array(min_v_motion_1, dtype=np.int16).tobytes())
+    file.write(np.array(max_v_motion_1, dtype=np.int16).tobytes())
+    file.write(np.array(min_v_motion_2, dtype=np.int16).tobytes())
+    file.write(np.array(max_v_motion_2, dtype=np.int16).tobytes())
+    file.write(np.array(min_v_res, dtype=np.int16).tobytes())
+    file.write(np.array(max_v_res, dtype=np.int16).tobytes())
+    file.write(np.array(min_v_res2, dtype=np.int16).tobytes())
+    file.write(np.array(max_v_res2, dtype=np.int16).tobytes())
+    file.write(np.array(quant_y.shape[1], dtype=np.uint32).tobytes())
+    file.write(np.array(quant_motion_1.shape[0], dtype=np.uint32).tobytes())
+    file.write(np.array(quant_motion_2.shape[0], dtype=np.uint32).tobytes())
     file.write(np.array(ys2[0].shape[0], dtype=np.uint32).tobytes())
     file.write(np.array(ys2[1].shape[0], dtype=np.uint32).tobytes())
-    file.write(np.array(len(motion_bitstream_1), dtype=np.uint16).tobytes())
-    file.write(np.array(len(motion_bitstream_2), dtype=np.uint16).tobytes())
-    file.write(np.array(len(ys2_2_feature_bitstream), dtype=np.uint16).tobytes())
-    file.write(np.array(len(ys2_2_bitstream), dtype=np.uint16).tobytes())
+    file.write(np.array(len(motion_bitstream_1), dtype=np.uint32).tobytes())
+    file.write(np.array(len(motion_bitstream_2), dtype=np.uint32).tobytes())
+    file.write(np.array(len(ys2_2_feature_bitstream), dtype=np.uint32).tobytes())
+    file.write(np.array(len(ys2_2_bitstream), dtype=np.uint32).tobytes())
     file.write(motion_bitstream_1)
     file.write(motion_bitstream_2)
     file.write(ys2_2_feature_bitstream)
     file.write(ys2_2_bitstream)
     file.write(residual_bitstream)
     file.close()
+    
+    m_2 = ME.SparseTensor(m_2.F, coordinates=m_2.C, coordinate_manager=m_1.coordinate_manager)
+    m = m_1 + m_2
+    
+    return {'motion_bits': len(motion_bitstream_1) * 8 + len(motion_bitstream_2) * 8,
+            'residual_bits': len(residual_bitstream) * 8,
+            'ys2_2_lossless_bits': len(ys2_2_feature_bitstream) * 8 + len(ys2_2_bitstream) * 8,
+            'round_motion': quant_motion_1.abs().sum().item() + quant_motion_2.abs().sum().item(), 
+            'round_residual': quant_y.abs().sum().item(), 
+            'motion_vector': m}
 
 
 def decode(f1, bitstream_filename, gpcc_bitstream_filename):
     ys1 = [f1, 0, 0, 0]
     file = open(bitstream_filename, 'rb')
     min_v_motion_1_, max_v_motion_1_, min_v_motion_2_, max_v_motion_2_, min_v_res_, max_v_res_, min_v_res2_, max_v_res2_ \
-        = np.frombuffer(file.read(8), dtype=np.int8)
+        = np.frombuffer(file.read(16), dtype=np.int16)
     quant_y_length, quant_motion_1_length, quant_motion_2_length = np.frombuffer(
-        file.read(6), dtype=np.uint16)
+        file.read(12), dtype=np.uint32)
     num_points_0, num_points_1 = np.frombuffer(
         file.read(8), dtype=np.uint32)
     motion_bitstream_1_length, motion_bitstream_2_length, ys2_2_feature_bitstream_length, ys2_2_bitstream_length = np.frombuffer(
-        file.read(8), dtype=np.uint16)
+        file.read(16), dtype=np.uint32)
     motion_bitstream_1_ = file.read(motion_bitstream_1_length)
     motion_bitstream_2_ = file.read(motion_bitstream_2_length)
     ys2_2_feature_bitstream_ = file.read(ys2_2_feature_bitstream_length)
@@ -222,8 +251,8 @@ def decode(f1, bitstream_filename, gpcc_bitstream_filename):
     # print('decoder m:', quant_motion_F_1_.sum().item(), quant_motion_F_2_.sum().item(),
     #       quant_y_F.sum().item(), ys2_2_feature_F.sum().item())
 
-    gpcc_decode(gpcc_bitstream_filename, os.path.join(tmp_dir, 'recon_ys2_5.ply'))
-    recon_ys2_5_C = 8 * torch.tensor(read_point_cloud(os.path.join(tmp_dir, 'recon_ys2_5.ply')),
+    gpcc_decode(gpcc_bitstream_filename, os.path.join(showdir, 'recon_ys2_5.ply'))
+    recon_ys2_5_C = 8 * torch.tensor(read_point_cloud(os.path.join(showdir, 'recon_ys2_5.ply')),
                                      dtype=torch.int32, device=device)
     recon_ys2_5_C = torch.cat([torch.zeros_like(recon_ys2_5_C[:, :1]), recon_ys2_5_C], dim=-1)
     recon_ys2_5_C = coordinate_sort_by_coor_sum(recon_ys2_5_C)
@@ -266,6 +295,22 @@ def decode(f1, bitstream_filename, gpcc_bitstream_filename):
     return recon_f2_C, f2_C, recon_f2
 
 
+def show_motion(motion, showdir, idx):
+    # write ply
+    xyz = motion.C[:, 1:]
+    color = motion.F.reshape(-1, 64, 3)
+    color = color[:, 20]
+    # print(color.max(dim=0, keepdim=True)[0], color.min(dim=0, keepdim=True)[0])
+    # c_max, c_min = 7, -7
+    # color = (color - c_min) / (c_max - c_min)
+    color = (color - color.min(dim=0, keepdim=True)[0]) / (
+            color.max(dim=0, keepdim=True)[0] - color.min(dim=0, keepdim=True)[0])
+    recon_pcd = open3d.geometry.PointCloud()
+    recon_pcd.points = open3d.utility.Vector3dVector(xyz.detach().cpu().numpy())
+    recon_pcd.colors = open3d.utility.Vector3dVector(color.detach().cpu().numpy())
+    open3d.io.write_point_cloud(os.path.join(showdir, 'motion' + str(idx) + '.ply'), recon_pcd, write_ascii=True)
+
+
 if __name__ == '__main__':
     device = torch.device('cuda')
     logger = logging.getLogger("Model")
@@ -275,14 +320,6 @@ if __name__ == '__main__':
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
-    tmp_dir = args.tmp_dir
-    # tmp_dir = './tmp_'+''.join(random.sample('0123456789', 10))
-    tmp_dir_ = Path(tmp_dir)
-    tmp_dir_.mkdir(exist_ok=True)
-    results_dir = args.results_dir
-    results_dir_ = Path(results_dir)
-    results_dir_.mkdir(exist_ok=True)
-    gpcc_bitstream_filename = os.path.join(tmp_dir, 'gpcc.bin')
 
     # load model
     log_string('PARAMETER ...')
@@ -293,7 +330,7 @@ if __name__ == '__main__':
 
     LOSSLESS_MODEL = importlib.import_module(args.lossless_model)
     lossless_model = LOSSLESS_MODEL.get_model()
-    lossless_checkpoint = torch.load('./final_ckpts/lossless_coder.pth')
+    lossless_checkpoint = torch.load(os.path.join(args.ckpt_dir, 'lossless_coder.pth'))
     old_paras = lossless_model.state_dict()
     new_state_dict = collections.OrderedDict()
     for k, v in lossless_checkpoint['model_state_dict'].items():
@@ -302,127 +339,180 @@ if __name__ == '__main__':
             new_state_dict[k1] = v
     old_paras.update(new_state_dict)
     lossless_model.load_state_dict(old_paras)
+    # lossless_model.load_state_dict(lossless_checkpoint['model_state_dict'])
     lossless_model = lossless_model.to(device).eval()
 
-    results = {
-        'basketball': {'bpp': [], 'd1-psnr': [], 'd2-psnr': [], 'exp_name': []},
-        'dancer': {'bpp': [], 'd1-psnr': [], 'd2-psnr': [], 'exp_name': []},
-        'exercise': {'bpp': [], 'd1-psnr': [], 'd2-psnr': [], 'exp_name': []},
-        'model': {'bpp': [], 'd1-psnr': [], 'd2-psnr': [], 'exp_name': []}
-    }
-    '''
-    start testing
-    0: basketballplayer
-    1: dancer
-    2: exercise
-    3: model
-    '''
     ckpts = {
-        'r4_0.15bpp.pth': 'new-I2_6.pth',
-        'r4_0.15bpp-1.pth': 'new-I4-5-1.pth',
-        'r4_0.15bpp-2.pth': 'new-I5-15.pth',
-        'r5_0.25bpp.pth': 'new-I7-15.pth',
-        'r6_0.3bpp.pth': 'new-I9.pth',
-        'r6_0.3bpp-1.pth': 'new-I11.pth',
-        # 'r7_0.4bpp.pth': 'new-I12-150.pth',
-        'r7_0.4bpp-1.pth': 'new-I15.pth',
+        'new-I2_6.pth': 'r4_0.15bpp.pth',
+        'new-I4-5-1.pth': 'r4_0.15bpp.pth',
+        'new-I5-15.pth': 'r4_0.15bpp.pth',
+        'new-I7-15.pth': 'r5_0.25bpp.pth',
+        'new-I9.pth': 'r6_0.3bpp.pth',
+        'new-I11.pth': 'r6_0.3bpp.pth',
+        'new-I15.pth': 'r7_0.4bpp.pth'
     }
     with torch.no_grad():
-        for pcgcv2_ckpt in ckpts:
-            exp_name = str(ckpts[pcgcv2_ckpt]).split('.')[0]
-            ddpcc_ckpt = os.path.join(args.ckpt_dir, ckpts[pcgcv2_ckpt])
-            pcgcv2_ckpt = os.path.join(args.pcgcv2_ckpt_dir, pcgcv2_ckpt)
-            checkpoint = torch.load(ddpcc_ckpt, map_location='cuda:0')
+        ## dataset settings
+        start_frame = 0 if not args.f1_path else int(args.f1_path.split('_')[-1].split('.')[0])
+                    
+        filedir_list = sorted(glob.glob(os.path.join(args.dataset_dir, '**', '*.*'), recursive=True))
+        filedir_list = [f for f in filedir_list if f.endswith('npy') or f.endswith('ply')]
+        args.frame_count = min(args.frame_count, len(filedir_list))
+        filedir_list = filedir_list[start_frame: args.frame_count]
+        
+        # save settings
+        seqname = os.path.basename(args.dataset_dir)
+        test_dirname = 'EncDec_'+str(args.model)+'_'+seqname
+        resultdir = os.path.join(BASE_DIR, 'Result_'+test_dirname)
+        resultdir_ = Path(resultdir)
+        resultdir_.mkdir(exist_ok=True)
+        
+        all_rate_mean_results = pd.DataFrame([])
+        all_mean_csvfile = os.path.join(resultdir, seqname
+                            + '_f' + str(start_frame) + '-' + str(args.frame_count)
+                            +'_all_mean.csv')
+        
+        for ddpcc_ckpt in ckpts:
+            # model settings
+            pcgcv2_ckpt = os.path.join(args.pcgcv2_ckpt_dir, ckpts[ddpcc_ckpt])
+            ddpcc_ckpt = os.path.join(args.ckpt_dir, ddpcc_ckpt)
+            checkpoint = torch.load(ddpcc_ckpt)
             model.load_state_dict(checkpoint['model_state_dict'])
             model = model.to(device).eval()
-            for sequence in (0, 1, 2, 3, ):
-                dataset = Dataset(root_dir=args.dataset_dir, split=[sequence], type='test', format='ply')
-                sequence_name = dataset.sequence_list[sequence]
-                log_string('start testing sequence ' + sequence_name + ', rate point ' + ddpcc_ckpt)
-                log_string('f bpp     d1PSNR  d2PSNR')
-                d1_psnr_sum = 0
-                d2_psnr_sum = 0
-                bpp_sum = 0
-                bits_sum = 0
-                num_points_sum = 0
-                enc_time_sum = 0
-                dec_time_sum = 0
+            
+            # save settings per rate: tmp files
+            rate = os.path.basename(ddpcc_ckpt).split('.pth')[0]
+            showdir = os.path.join(BASE_DIR, test_dirname+'_'+rate)
+            showdir_ = Path(showdir)
+            showdir_.mkdir(exist_ok=True)
+            
+            csvfile = os.path.join(resultdir, seqname
+                                + '_f' + str(start_frame) + '-' + str(args.frame_count)
+                                +'_'+rate + '.csv')
 
-                # encode the first frame
-                xyz, point, xyz1, point1 = collate_pointcloud_fn([dataset[0]])
-                f1 = ME.SparseTensor(features=point, coordinates=xyz, device=device)
-                peak_value = psnr_peak_value(f1)
-                print('peak_value:', peak_value)
-                bpp, d1psnr, d2psnr, f1 = test_one_frame(f1, pcgcv2_ckpt, os.path.join(tmp_dir, 'pcgcv2'), res=peak_value+1)
+            # test
+            log_string('start testing sequence ' + seqname + ', rate point ' + ddpcc_ckpt)
+            log_string('f bpp     d1PSNR  d2PSNR')
+
+            all_frame_results = pd.DataFrame([])
+            peak_value = psnr_peak_value(load_sparse_tensor(filedir_list[0], device))
+            log_string('PSNR Peak value: ' + str(peak_value))
+            
+            # code the first frame
+            if not args.f1_path:
+                f1 = load_sparse_tensor(filedir_list[0], device)
+                bpp, d1psnr, d2psnr, f1 = test_one_frame(f1, pcgcv2_ckpt, os.path.join(showdir, 'pcgcv2'),
+                                                         res=peak_value)
                 f1 = ME.SparseTensor(torch.ones_like(f1.F[:, :1]), coordinates=f1.C)
                 log_string(str(0) + ' ' + str(bpp)[:7] + ' ' + str(d1psnr)[:7] + ' ' + str(d2psnr)[:7] + '\n')
-                bpp_sum += bpp
-                d1_psnr_sum += d1psnr
-                d2_psnr_sum += d2psnr
-                num_points_sum += (f1.size()[0] * 1.0)
-                bits_sum += (f1.size()[0] * bpp)
+                results = {'filedir': filedir_list[0], 
+                           'bpp': bpp,
+                           'motion_bpp': 0,
+                           'residual_bpp': 0,
+                           'ys2_2_lossless_bpp': 0,
+                           'gpcc_bpp': 0,
+                           'd1_psnr': d1psnr,
+                           'd2_psnr': d2psnr,
+                           'psnr_peak': peak_value,
+                           'num_of_points': f1.size()[0],
+                           'num_of_bits': f1.size()[0] * bpp, 
+                           'motion_bits': 0,
+                           'residual_bits': 0,
+                           'ys2_2_lossless_bits': 0,
+                           'gpcc_bits': 0,
+                           'enc_time': 0,
+                           'dec_time': 0, 
+                           'round_motion': 0,
+                           'round_residual': 0,}
+                results = pd.DataFrame([results])
+                all_frame_results = pd.concat([all_frame_results, results], ignore_index=True)
+                all_frame_results.to_csv(csvfile, index=False)
+            else:
+                f1 = load_sparse_tensor(args.f1_path, device)
 
-                for i in range(1, args.frame_count):
-                    if args.overwrite:
-                        bitstream_filename = os.path.join(tmp_dir, 'bitstream.bin')
-                        gpcc_bitstream_filename = os.path.join(tmp_dir, 'ys2_5.bin')
-                    else:
-                        bitstream_filename = os.path.join(tmp_dir, 'bitstream_' + str(i) + '.bin')
-                        gpcc_bitstream_filename = os.path.join(tmp_dir, 'ys2_5_' + str(i) + '.bin')
+            # code inter frames
+            for i in range(1, args.frame_count):
+                if args.overwrite:
+                    bitstream_filename = os.path.join(showdir, 'bitstream.bin')
+                    gpcc_bitstream_filename = os.path.join(showdir, 'ys2_5.bin')
+                else:
+                    bitstream_filename = os.path.join(showdir, 'bitstream_' + str(i) + '.bin')
+                    gpcc_bitstream_filename = os.path.join(showdir, 'ys2_5_' + str(i) + '.bin')
+                
+                out2, out_cls2, target2, keep2 = [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]
+                f2 = load_sparse_tensor(filedir_list[i], device)
+                num_points = f2.size()[0]
 
-                    out2, out_cls2, target2, keep2 = [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]
-                    xyz, point, xyz1, point1 = collate_pointcloud_fn([dataset[i-1]])
-                    f1 = sort_by_coor_sum(f1)
-                    f2 = ME.SparseTensor(features=point1, coordinates=xyz1, device=device)
-                    num_points = f2.size()[0]
+                start_time = time.time()
+                enc_results = encode(f1, f2, bitstream_filename, gpcc_bitstream_filename)
+                enc_time = time.time() - start_time
+                log_string('Encoding frame ' + str(i) + ' time: ' + str(round(enc_time, 4)) + 's')
 
-                    encoding_st = time.time()
-                    encode(f1, f2, bitstream_filename, gpcc_bitstream_filename)
-                    encoding_et = time.time()
-                    log_string('encoding time: ' + str(encoding_et - encoding_st))
-                    ddpcc_bpp = os.path.getsize(bitstream_filename) * 8 / num_points
-                    gpcc_bpp = os.path.getsize(gpcc_bitstream_filename) * 8 / num_points
-                    bpp = ddpcc_bpp + gpcc_bpp
+                ddpcc_bits = os.path.getsize(bitstream_filename) * 8
+                gpcc_bits = os.path.getsize(gpcc_bitstream_filename) * 8
+                bits = ddpcc_bits + gpcc_bits
+                bpp = bits / num_points
 
-                    decoding_st = time.time()
-                    recon_f2_C, f2_C, recon_f2 = decode(f1, bitstream_filename, gpcc_bitstream_filename)
-                    decoding_et = time.time()
-                    log_string('decoding time: ' + str(decoding_et - decoding_st))
+                start_time = time.time()
+                recon_f2_C, f2_C, recon_f2 = decode(f1, bitstream_filename, gpcc_bitstream_filename)
+                dec_time = time.time() - start_time
+                log_string('Decoding frame ' + str(i) + ' time: ' + str(round(dec_time, 4)) + 's')
 
-                    if i != 1:
-                        enc_time_sum += encoding_et - encoding_st
-                        dec_time_sum += decoding_et - decoding_st
-
-                    # D1 D2
-                    # write_ply_data(os.path.join(tmp_dir, 'f2.ply'), f2_C)
-                    write_ply_open3d_normal(os.path.join(tmp_dir, 'f2.ply'), f2_C)
-                    write_ply_data(os.path.join(tmp_dir, 'f2_recon.ply'), recon_f2_C)
-                    # print('psnr resolution\t', args.resolution - 1)
-                    PSNRs = pc_error(os.path.join(tmp_dir, 'f2.ply'), os.path.join(tmp_dir, 'f2_recon.ply'), res=peak_value+1,
-                                     normal=True)
-                    d1psnr = PSNRs['mseF,PSNR (p2point)'][0]
-                    d2psnr = PSNRs['mseF,PSNR (p2plane)'][0]
-                    log_string(str(i) + ' ' + str(bpp)[:7] + ' ' + str(d1psnr)[:7] + ' ' + str(d2psnr)[:7] + '\n')
-                    f1 = recon_f2
-                    bpp_sum += bpp
-                    d1_psnr_sum += d1psnr
-                    d2_psnr_sum += d2psnr
-                    num_points_sum += (num_points * 1.0)
-
-                # sequence results
-                bpp_avg = bpp_sum / args.frame_count
-                d1_psnr_avg = d1_psnr_sum / args.frame_count
-                d2_psnr_avg = d2_psnr_sum / args.frame_count
-                results[sequence_name]['bpp'].append(bpp_avg)
-                results[sequence_name]['d1-psnr'].append(d1_psnr_avg)
-                results[sequence_name]['d2-psnr'].append(d2_psnr_avg)
-                results[sequence_name]['exp_name'].append(exp_name)
-                log_string(dataset.sequence_list[sequence] + ' average bpp: ' + str(bpp_avg))
-                log_string(dataset.sequence_list[sequence] + ' average d1-psnr: ' + str(d1_psnr_avg))
-                log_string(dataset.sequence_list[sequence] + ' average d2-psnr: ' + str(d2_psnr_avg))
-                log_string('average_enc_time: ' + str(enc_time_sum / (args.frame_count - 2)))
-                log_string('average_dec_time: ' + str(dec_time_sum / (args.frame_count - 2)))
-
-                # save sequence results
-                df = pd.DataFrame(results[sequence_name])
-                df.to_csv(os.path.join(results_dir, sequence_name + '.csv'), index=False)
+                # D1 D2
+                ori_dir, dec_dir = write_file(f2_C, recon_f2_C, showdir, i)
+                PSNRs = pc_error(ori_dir, dec_dir, peak_value, normal=True)
+                d1psnr = PSNRs['mseF,PSNR (p2point)'][0]
+                d2psnr = PSNRs['mseF,PSNR (p2plane)'][0]
+                log_string(str(i) + ' ' + str(bpp)[:7] + ' ' + str(d1psnr)[:7] + ' ' + str(d2psnr)[:7] + '\n')
+                f1 = recon_f2
+                
+                results = {'filedir': filedir_list[i], 
+                           'bpp': bpp,
+                           'motion_bpp': enc_results['motion_bits'] / num_points,
+                           'residual_bpp': enc_results['residual_bits'] / num_points,
+                           'ys2_2_lossless_bpp': enc_results['ys2_2_lossless_bits'] / num_points,
+                           'gpcc_bpp': gpcc_bits / num_points,
+                           'd1_psnr': d1psnr,
+                           'd2_psnr': d2psnr,
+                           'psnr_peak': peak_value,
+                           'num_of_points': num_points,
+                           'num_of_bits': bits,
+                           'motion_bits': enc_results['motion_bits'],
+                           'residual_bits': enc_results['residual_bits'],
+                           'ys2_2_lossless_bits': enc_results['ys2_2_lossless_bits'],
+                           'gpcc_bits': gpcc_bits,
+                           'enc_time': enc_time,
+                           'dec_time': dec_time,
+                           'round_motion': enc_results['round_motion'],
+                           'round_residual': enc_results['round_residual'],}
+                results = pd.DataFrame([results])
+                all_frame_results = pd.concat([all_frame_results, results], ignore_index=True)
+                all_frame_results.to_csv(csvfile, index=False)
+                
+                # TODO: optional
+                show_motion(enc_results['motion_vector'], showdir, i)
+                
+                torch.cuda.empty_cache()
+                
+            # mean results of one rate
+            mean_results = {'rate': rate, 
+                            'bpip': all_frame_results['num_of_bits'].sum() / all_frame_results['num_of_points'].sum()}
+            inter_keys = ['motion_bpp', 'residual_bpp', 'ys2_2_lossless_bpp', 'gpcc_bpp',
+                            'motion_bits', 'residual_bits', 'ys2_2_lossless_bits', 'gpcc_bits',
+                            'round_motion', 'round_residual']
+            for col in all_frame_results.columns:
+                if col in ['filedir', ]:
+                    continue
+                if col in inter_keys:
+                    mean_results[col + '_avg'] = all_frame_results[col][1:].mean()
+                else:
+                    mean_results[col + '_avg'] = all_frame_results[col].mean()
+            
+            mean_results = pd.DataFrame([mean_results])
+            all_rate_mean_results = pd.concat([all_rate_mean_results, mean_results], ignore_index=True)
+            all_rate_mean_results.to_csv(all_mean_csvfile, index=False)
+            log_string('Results saved to ' + csvfile)
+            log_string('All rate mean results saved to ' + all_mean_csvfile)
+            log_string(seqname + ' average bpp: ' + str(mean_results['bpp_avg']))
+            log_string(seqname + ' average d1_psnr: ' + str(mean_results['d1_psnr_avg']))
+            log_string(seqname + ' average d2_psnr: ' + str(mean_results['d2_psnr_avg']))
