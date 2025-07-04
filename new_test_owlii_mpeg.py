@@ -210,7 +210,7 @@ def encode(f1, f2, bitstream_filename, gpcc_bitstream_filename):
     return {'motion_bits': len(motion_bitstream_1) * 8 + len(motion_bitstream_2) * 8,
             'residual_bits': len(residual_bitstream) * 8,
             'ys2_2_lossless_bits': len(ys2_2_feature_bitstream) * 8 + len(ys2_2_bitstream) * 8,
-            'round_motion': quant_motion_1.abs().sum().item() + quant_motion_2.abs().sum().item(), 
+            'round_motion': quant_motion_1.F.abs().sum().item() + quant_motion_2.F.abs().sum().item(), 
             'round_residual': quant_y.abs().sum().item(), 
             'motion_vector': m}
 
